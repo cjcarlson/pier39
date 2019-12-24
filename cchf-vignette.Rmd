@@ -1,11 +1,9 @@
 ---
-title: "Mapping _Hyalomma_ and Crimean-Congo Haemorrhagic Fever in Africa with BARTs"
-output: pdf_document
-vignette: >
-  %\VignetteIndexEntry{cchf-vignette}
-  %\VignetteEncoding{UTF-8}
-  %\VignetteEngine{knitr::rmarkdown}
-editor_options: 
+title: "Mapping Crimean-Congo Haemorrhagic Fever in Africa with BART"
+output:
+  html_document:
+    df_print: paged
+editor_options:
   chunk_output_type: console
 ---
 
@@ -16,39 +14,46 @@ knitr::opts_chunk$set(
 )
 
 suppressMessages(library(tidyverse))
+options(digits=2)
 ```
 
 # Getting Started
 
 So you're interested in using \texttt{embarcadero} to do species distribution modeling with Bayesian additive regression trees! That's great. BARTs are a powerful way to do machine learning and, while not a new method per se, they are very new for SDMs. 
 
-Most of the core functionality of \texttt{embarcadero} is actually a wrapper for \texttt{dbarts}, which runs the actual BART fitting process. This vignete will show you
-
-1. How to run BARTs
-1. Variable importance measures
-1. Automated variable selection
-1. Partial dependence plots
-1. Visualizing the posterior distribution
-
-There's also just going to be some general comments on the process of using BARTs, the challenges to working with them, and some things that are hopefully coming next.
+In this advanced tutorial, I'm going to assume that you've seen the main paper and the `embarcadero` package vignette, which goes over basic functions and some of the internal structure of BART models. This tutorial, and the associated repo (`cjcarlson/pier39`), are intended for advanced users interested in seeing what a professional workflow might look like for an applied use.
 
 
-```{r setup, echo=FALSE}
+```{r setup, echo=FALSE, message=FALSE}
 library(embarcadero)
-library(velox)
-
 set.seed(12345)
 ```
 
-Doors are closing; please stand clear of the doors.
+```{r, eval=FALSE}
+library(embarcadero)
+set.seed(12345)
+```
+
+Our goal here is to do a few things:
+
+1. Build a species distribution model for _Hyalomma truncatum_, a tick we think might be a vector of Crimean-Congo haemorrhagic fever (CCHF) in Africa.
+2. To build a transmission risk map, again using species distribution modeling/ecological niche modeling, for CCHF in Africa. 
+3. To see if we learn anything from that model about CCHF we didn't know before.
+4. To see some of the advanced visualization and workflow tricks in the `embarcadero` package!
 
 # Mapping Hyalomma
 
-We're going to make a suitability layer for _Hyalomma truncatum_, a possible CCHF vector, that we can use in the CCHF map.
+We're going to make a suitability layer for _Hyalomma truncatum_, a possible CCHF vector. The tick occurrence data, which is a set of presence points, comes from Cumming et al. (1998) _Bulletin of Entomological Research_, one of the most detailed datasets in the world on parasite distributions. We're going to build a species distribution model using those points, some climate data, and a few other convenient layers that might be relevant.
 
 ## Data entry
 
-Let's start by loading in the sample data and predictor set. Based on some expert opinion, I picked a handful of variables I thought might work well (and it's already reduced down to minimize redunandancy): 
+Let's start by loading in the climate data. We'll use three main sources:
+
+1. WorldClim v1.4 (Hijmans et al. 2005), a harmonized dataset of bioclimatic variables mostly used for species distribution modeling 
+2. Two layers describing long-term averages of the normalized difference vegetation index (NDVI), which captures the greenness of a landscape (taken from previous use in Carlson et al. 2018). This can be an important variable for measuring invertebrate distributions, for example, or partitioning landscapes into different biomes.
+3. A layer produced by the NASA SEDAC center describing the percent cropland by grid cell. If we think ruminants are spreading CCHF, this might matter! (https://sedac.ciesin.columbia.edu/data/set/aglands-croplands-2000)
+
+Based on some expert opinion, I picked a handful of variables I thought might work well (and it's already reduced down to minimize redunandancy): 
 
 * BIO1: Mean annual temperature
 * BIO2: Mean diurnal range
@@ -62,41 +67,49 @@ Let's start by loading in the sample data and predictor set. Based on some exper
 * NDVI amplitude
 * Percent cropland by pixel
 
-Let's read in the covariates, and make a bigger stack just to do some faster predictions along the way; \texttt{velox} works well for this. BARTs predict fairly slowly with \texttt{dbarts} because it's not parallelized yet. Other packages have that capacity, but less functionality for other things, so we chose functionality at the expense of speed; hopefully future versions will build on this. 
+Let's read in the covariates. 
 
 ```{r}
-data("covsraw")
-covs <- covsraw
+load(file = "~/Github/pier39/covsraw.rda"); covs <- covsraw
+class(covs)
 covs@crs <- crs('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0')
-
-cov.big <- bigstack(covs, 10)
 ```
 
-_Hyalomma truncatum_ occurrence data is taken from the Cumming tick dataset
+This is an *incredibly* granular dataset, which means BART is going to predict a little slowly. (Other packages for BART models have faster predictions, but less functionality for other things, so I chose functionality at the expense of speed; hopefully future versions will build on this.) We can work around this a little by aggregating the RasterStack; because this comes up a lot, there's a function `bigstack` in `embarcadero` to do this:
 
 ```{r}
-data(ticks)
+cov.big <- bigstack(covs, by=10, quiet = TRUE)
+dim(covs)
+dim(cov.big)
+```
+
+Next, let's load in our tick occurrence dataset, which is a set of longitude/latitude coordinates. 
+
+```{r}
+load(file = "~/Github/pier39/ticks.rda")
 head(ticks)
 nrow(ticks)
 ```
 
-First, we extract the data from the presence points. But let's spatially thin those points first, to one point per raster grid cell, since they're a little over-aggregated. (Just a pretty normal part of ecological data.)
+Presence points are usually a little aggregated in space, so as a normal data cleaning practice, I like to thin my occurrence data to one point per raster grid cell.
 
 ```{r}
-
+# Make a spatial point data frame
 mod <- SpatialPointsDataFrame(ticks[,3:4],data.frame(ticks[,1]))
 names(mod@data) <- 'Presence'
-# Rasterizing makes unique points to the grid cell
+nrow(mod)
+
+# Rasterizing and converting back to points makes one unique point per grid cell
 tmp=rasterize(mod, covs[[1]], field="Presence", fun="min")
 pts.sp1=rasterToPoints(tmp, fun=function(x){x>0})
 nrow(pts.sp1)
 
+# Extract the climate data at each point 
 pres.cov <- raster::extract(covs, pts.sp1[,1:2])
 head(pres.cov)
-
 ```
 
-Next, let's generate an equal number of pseudoabsences around Africa to the number of presences we have. BARTs are like BRTs in that they are sensitive to assumed prevalence, if not even more so than BRTs; I strongly suggest using an equal number of presences and absences in your training data. You can experiment with the demo data by changing "nrow(ticks)" to "5000" below if you want to see the model overfit. 
+Next, let's generate an equal number of pseudoabsences around Africa to the number of presences we have. BARTs are like BRTs in that they are sensitive to assumed prevalence; anecdotally, I strongly suggest using an equal number of presences and absences in your training data. You can experiment with the demo data by changing "nrow(ticks)" to "5000" below if you want to see some weirder model behavior. 
 
 ```{r}
 #Generate the data
@@ -111,116 +124,82 @@ abs.cov <- data.frame(abs.cov); abs.cov$tick <- 0
 all.cov <- rbind(pres.cov, abs.cov)
 head(all.cov)
 
-# Let's just clean it up a little bit
+# Let's just clean it up a little bit - remove any missing data
 all.cov <- all.cov[complete.cases(all.cov),]
 ```
 
-Now we have a dataset ready to model. 
+Now we have a dataset ready to do some modeling!
 
 ## Running models with dbarts
 
 We could try something really simple on defaults, right out the gate. The \texttt{bart} function in \texttt{dbarts} can just be run on defaults:
 
 ```{r}
-first.model <- bart(all.cov[,1:11], all.cov[,'tick'], keeptrees=TRUE)
+xvars <- names(all.cov)[!(names(all.cov)=='tick')]
+xvars
+first.model <- bart(all.cov[,xvars], all.cov[,'tick'], keeptrees=TRUE)
 ```
 
-That's well and good, but dbarts doesn't have great tools to evaluate what the models do, or how they're working as predictive tools. Plus, we can't see the spatial prediction, which makes it hard to know if it's even looking plausible. One quick trick is to use the \texttt{bart.auc} function in \texttt{embarcadero}.
+In reality, we know we want to do variable set reduction, and tune the model a bit from there. In the main vignette you can see the different component parts of that process. Here, we're going to use our most powerful shortcut: `bart.step`. Inside `bart.step`, five things happen:
+
+1. The variable importance diagnostic from `varimp.diag` is generated
+2. The stepwise variable set reduction in `variable.step` is run
+3. The final model is run with the reduced predictor set
+4. The variable importance plot from `varimp` is generated
+5. The model summary from `summary` is returned
+
+This is slow but very easy to simply fire off if you're running a large workflow. Let's do it:
 
 ```{r}
-bart.auc(first.model)
+sdm <- bart.step(xdata = all.cov[,xvars], 
+                 ydata = all.cov[,'tick'], 
+                 full = TRUE)
 ```
+
+Out of all the variables, "crop" seems to be especially undesirable as a predictor. A few other variables seem like they might not be helping the model either, but we probably need a systematic way to deal with that.
 
 A high AUC value indicates our model performs well. The AUC function also returns an optimal threshold that maximizes the true skill statistic (TSS), and the sensitivity/specificity of the model at that cutoff (alpha).
 
 What do the predictions look like? To make a predicted raster, we have to use \texttt{embarcadero}'s wrapper for the native \texttt{predict} function in \texttt{dbarts}. 
 
-
 ```{r, fig.fullwidth=TRUE}
 
-pred.prelim <- bart.map(model = first.model,
-                        inputstack = cov.big)
-plot(pred.prelim, main='Hyalomma truncatum')
+# Do the spatial prediction
+hytr.layer <- predict(model = sdm,
+                      inputstack = covs)
 
+# How's it look?
+plot(hytr.layer, main='Hyalomma truncatum')
+
+# Check that against the presence data:
 points(SpatialPoints(ticks[,c('Longitude.X','Latitude.Y')]), 
         pch=16, cex=0.2)
 
 ```
 
-This model seems okay. We're getting predictions in places we don't have any records, like North Africa. That could be good if we think that's suitable climatic space (and if you know Hyalomma, you know there's definitely some species there, though posibly not truncatum), but with much of the inhabited area not being predicted, let's revisit that later.
-
-## Variable Selection
-
-Next, let's try some automated variable selection. There's a few different component pieces that do this in \texttt{embarcadero}.
-
-First, let's look at the variable contributions in the existing model:
-
-```{r}
-varimp(model=first.model, 
-       plots = TRUE)
-```
-
-This tells us roughly how the variables contribute so far, but it doesn't tell us who to eliminate first - we don't want to eliminate based on a single run.
-
-Previously, it's been suggested that the best variable diagnostic for BART is to run models with progressively smaller numbers of trees - and as you get down to 10 or 20 trees per model, the contributions of bad or irrelevant variables will drop out. This is because like most CART methods, BART has the ability to overfit on variables with low information content. 
-
-What \texttt{varimp.diag} does is run variable importance for hundreds of models at different tree levels. Let's say 10 models per combination is enough. This will print each level of models it's run, and then it will make a plot that shows us variable importance across runs.
-
-```{r}
-varimp.diag(x.data=all.cov[,1:11], 
-            y.data=all.cov[,'tick'],
-            iter=100)
-```
-
-Out of all the variables, "crop" seems to be especially undesirable as a predictor. A few other variables seem like they might not be helping the model either, but we probably need a systematic way to deal with that.
-
-Automated stepwise reduction isn't the best way to do things in machine learning, but it's consistent over a high number of iterations, and is the current stopgap in the package. \texttt{variable.step} will automate the process, starting with the full feature set, fitting \texttt{iter} models with \texttt{n.trees} each (use a small value - 10 or 20), and reducing stepwise based on the variable with the lowest importance each iteration. Then, it'll make a recommendation for a feature set based on root mean square error (RMSE). 
-
-That's not perfect, and you can take or leave it as an approach. Expert knowledge about variable importance and cautious inclusion will _always_ be better, epistemologically, than automated stepwise feature set reduction.
-
-```{r}
-varlist <- variable.step(x.data=all.cov[,1:11],
-              y.data=all.cov[,'tick'],
-              n.trees=10)
-```
-
-Normally this step cuts a few variables - it's probably a good sign about our _a priori_ variable selection that not much got dropped. Let's run a "good" model with that predictor cut.
-
-```{r}
-
-# Rerun the model
-good.model <- bart(all.cov[,varlist], all.cov[,'tick'], keeptrees=TRUE)
-
-# Check the AUC
-bart.auc(good.model)
-# Do the spatial prediction
-hytr.layer <- bart.map(model = good.model,
-                       inputstack = covs)
-# How's it look?
-plot(hytr.layer, main='Hyalomma truncatum')
-
-```
+This model seems okay. We're getting predictions in places we don't have any records, like North Africa. That could be good if we think that's suitable climatic space (and if you know _Hyalomma_, you know there's definitely some species there, though posibly not truncatum), but with much of the inhabited area not being predicted, let's revisit that later.
 
 # Mapping CCHF
 
-Alright. Now let's get back to business by building the CCHF map. We're going to use the same predictors as we used for _H. truncatum_ plus the suitability layer.
+Alright. Now let's get back to business by building the CCHF map. We're going to use the same predictors as we used for _H. truncatum_, plus the suitability layer for the ticks. (Using one SDM layer in another map is a sort of finnicky business - sometimes it improves predictions and is epistemologically valid, other times it predetermines a certain outcome in the final model, given issues with colinearity. That's a broader discussion than what we're doing here! If the final map predicts some areas that aren't where the ticks are, I'll call that a win. If they were identical, I would worry.)
 
 ## Running the CCHF model
 
-This time, let's just do the variable selection up front. And instead of running each piece separately, we can run a full-service model using \texttt{bart.var} from \texttt{embarcadero}. That runs each of the steps we did above, including running the reduced-feature model, and returns a list object with a model and a variable set.
+This time, let's just do the variable selection up front. Same plan as before:
 
 ```{r}
 
-# Update those pesky covariates
+# Update the covariate stack
 covs <- stack(covs, hytr.layer)
-names(covs)[12]='hytr'
+names(covs)[12]='hytr' # for Hyalomma truncatum
+xvars <- c(xvars, 'hytr')
 
 # Read in the data
-data(cchf)
+load(file = "~/Github/pier39/cchf.rda")
 head(cchf)
 nrow(cchf)
 
-# Spatial thinning checks; this also limits it to African points
+# Spatial thinning checks; this also limits it to African points (CCHF is found elsewhere in the world too, and our data includes other records!)
 cchf <- cchf[,c('LONGITUDE','LATITUDE')]; cchf$Presence = 1
 cchf <- SpatialPointsDataFrame(cchf[,1:2],data.frame(Presence=cchf[,3]))
 tmp=rasterize(cchf, covs[[1]], field="Presence", fun="min")
@@ -246,19 +225,19 @@ all.cov <- all.cov[complete.cases(all.cov),]; nrow(all.cov)
 head(all.cov)
 
 # This part automates the variable selection and returns the model
-cchf.model <- bart.var(xdata=all.cov[,1:12], 
-                       ydata=all.cov[,'cchf'], 
-                       iter.step = 100, 
-                       tree.step = 10,
-                       iter.plot = 100)
 
-bart.auc(cchf.model)
+cchf.model <- bart.step(xdata = all.cov[,xvars], 
+                        ydata = all.cov[,'cchf'], 
+                        full = TRUE)
 
 # Do the spatial prediction
-cchf.map <- bart.map(model = cchf.model,
-                     inputstack = covs)
+cchf.map <- predict(model = cchf.model,
+                    inputstack = covs)
+
 # How's it look?
 plot(cchf.map, main='CCHF')
+points(pts.sp1, col='black', pch=16)
+
 ```
 
 OK. Nice model! Let's see what we can do to unpack it.
@@ -349,8 +328,12 @@ plot(cchf.map$upper.ci - cchf.map$lower.ci, box=FALSE, axes=FALSE)
 
 That's all the functionality I've outlined so far. I'll keep building out the visualizations to make them more consistent and publication-ready for people, and am also eager to work with other people on this.
 
-Finally, a big thanks to Jane Messina _et al._ for sharing their CCHF data, and to Graeme Cumming for tick data:
+Finally, a big thanks to Jane Messina _et al._ for sharing their CCHF data, and to Graeme Cumming for tick data.
 
+# References
+
+* Carlson, C.J., _et al._ "The global distribution of Bacillus anthracis and associated anthrax risk to humans, livestock and wildlife." Nature Microbiology (2019): _in press_.
 * Cumming, G. S. "Host preference in African ticks (Acari: Ixodida): a quantitative data set." _Bulletin of Entomological Research_ 88.4 (1998): 379-406.
+* Hijmans, R.J., _et al._ "Very high resolution interpolated climate surfaces for global land areas." _International Journal of Climatology: A Journal of the Royal Meteorological Society_ 25.15 (2005): 1965-1978.
 * Messina, Jane P., _et al._ "A global compendium of human Crimean-Congo haemorrhagic fever virus occurrence." _Scientific Data_ 2 (2015): 150016.
 * Messina, Jane P., _et al._ "The global distribution of Crimean-Congo hemorrhagic fever." _Transactions of the Royal Society of Tropical Medicine and Hygiene_ 109.8 (2015): 503-513.
