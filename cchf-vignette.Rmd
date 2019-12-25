@@ -1,8 +1,6 @@
 ---
 title: "Mapping Crimean-Congo Haemorrhagic Fever in Africa with BART"
-output:
-  html_document:
-    df_print: paged
+output: pdf_document
 editor_options:
   chunk_output_type: console
 ---
@@ -29,7 +27,7 @@ library(embarcadero)
 set.seed(12345)
 ```
 
-```{r, eval=FALSE}
+```{r load-package, eval=FALSE}
 library(embarcadero)
 set.seed(12345)
 ```
@@ -69,23 +67,15 @@ Based on some expert opinion, I picked a handful of variables I thought might wo
 
 Let's read in the covariates. 
 
-```{r}
+```{r load-climate}
 load(file = "~/Github/pier39/covsraw.rda"); covs <- covsraw
 class(covs)
 covs@crs <- crs('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0')
 ```
 
-This is an *incredibly* granular dataset, which means BART is going to predict a little slowly. (Other packages for BART models have faster predictions, but less functionality for other things, so I chose functionality at the expense of speed; hopefully future versions will build on this.) We can work around this a little by aggregating the RasterStack; because this comes up a lot, there's a function `bigstack` in `embarcadero` to do this:
-
-```{r}
-cov.big <- bigstack(covs, by=10, quiet = TRUE)
-dim(covs)
-dim(cov.big)
-```
-
 Next, let's load in our tick occurrence dataset, which is a set of longitude/latitude coordinates. 
 
-```{r}
+```{r load-ticks}
 load(file = "~/Github/pier39/ticks.rda")
 head(ticks)
 nrow(ticks)
@@ -93,7 +83,7 @@ nrow(ticks)
 
 Presence points are usually a little aggregated in space, so as a normal data cleaning practice, I like to thin my occurrence data to one point per raster grid cell.
 
-```{r}
+```{r tick-points}
 # Make a spatial point data frame
 mod <- SpatialPointsDataFrame(ticks[,3:4],data.frame(ticks[,1]))
 names(mod@data) <- 'Presence'
@@ -111,7 +101,7 @@ head(pres.cov)
 
 Next, let's generate an equal number of pseudoabsences around Africa to the number of presences we have. BARTs are like BRTs in that they are sensitive to assumed prevalence; anecdotally, I strongly suggest using an equal number of presences and absences in your training data. You can experiment with the demo data by changing "nrow(ticks)" to "5000" below if you want to see some weirder model behavior. 
 
-```{r}
+```{r tick-dataframe}
 #Generate the data
 absence <- randomPoints(covs,nrow(ticks)) 
 abs.cov <- raster::extract(covs, absence)
@@ -134,7 +124,7 @@ Now we have a dataset ready to do some modeling!
 
 We could try something really simple on defaults, right out the gate. The \texttt{bart} function in \texttt{dbarts} can just be run on defaults:
 
-```{r}
+```{r example-model}
 xvars <- names(all.cov)[!(names(all.cov)=='tick')]
 xvars
 first.model <- bart(all.cov[,xvars], all.cov[,'tick'], keeptrees=TRUE)
@@ -150,10 +140,13 @@ In reality, we know we want to do variable set reduction, and tune the model a b
 
 This is slow but very easy to simply fire off if you're running a large workflow. Let's do it:
 
-```{r}
+```{r stepwise-bart-tick}
 sdm <- bart.step(xdata = all.cov[,xvars], 
                  ydata = all.cov[,'tick'], 
-                 full = TRUE)
+                 full = TRUE,
+                 iter.plot=5,
+                 iter.step=10,
+                 quiet = TRUE)
 ```
 
 Out of all the variables, "crop" seems to be especially undesirable as a predictor. A few other variables seem like they might not be helping the model either, but we probably need a systematic way to deal with that.
@@ -162,14 +155,16 @@ A high AUC value indicates our model performs well. The AUC function also return
 
 What do the predictions look like? To make a predicted raster, we have to use \texttt{embarcadero}'s wrapper for the native \texttt{predict} function in \texttt{dbarts}. 
 
-```{r, fig.fullwidth=TRUE}
+```{r tick-map, fig.fullwidth=TRUE}
 
 # Do the spatial prediction
-hytr.layer <- predict(model = sdm,
-                      inputstack = covs)
+hytr.layer <- predict(object = sdm,
+                      inputstack = covs,
+                      splitby = 20,
+                      quiet = TRUE)
 
 # How's it look?
-plot(hytr.layer, main='Hyalomma truncatum')
+plot(hytr.layer, box=FALSE, axes=FALSE, main='Hyalomma truncatum')
 
 # Check that against the presence data:
 points(SpatialPoints(ticks[,c('Longitude.X','Latitude.Y')]), 
@@ -187,19 +182,22 @@ Alright. Now let's get back to business by building the CCHF map. We're going to
 
 This time, let's just do the variable selection up front. Same plan as before:
 
-```{r}
+```{r cchf-pipeline}
 
 # Update the covariate stack
+
 covs <- stack(covs, hytr.layer)
 names(covs)[12]='hytr' # for Hyalomma truncatum
 xvars <- c(xvars, 'hytr')
 
 # Read in the data
+
 load(file = "~/Github/pier39/cchf.rda")
 head(cchf)
 nrow(cchf)
 
 # Spatial thinning checks; this also limits it to African points (CCHF is found elsewhere in the world too, and our data includes other records!)
+
 cchf <- cchf[,c('LONGITUDE','LATITUDE')]; cchf$Presence = 1
 cchf <- SpatialPointsDataFrame(cchf[,1:2],data.frame(Presence=cchf[,3]))
 tmp=rasterize(cchf, covs[[1]], field="Presence", fun="min")
@@ -207,19 +205,23 @@ pts.sp1=rasterToPoints(tmp, fun=function(x){x>0})
 nrow(pts.sp1)
 
 # Extract presence values
+
 pres.cov <- raster::extract(covs, pts.sp1[,1:2])
 pres.cov <- na.omit(pres.cov)
 head(pres.cov)
 
 #Generate pseudoabsences
+
 absence <- randomPoints(covs,nrow(pres.cov)) 
 abs.cov <- raster::extract(covs, absence)
 
 #Code the response
+
 pres.cov <- data.frame(pres.cov); pres.cov$cchf <- 1
 abs.cov <- data.frame(abs.cov); abs.cov$cchf <- 0
 
 # And one to bind them
+
 all.cov <- rbind(pres.cov, abs.cov)
 all.cov <- all.cov[complete.cases(all.cov),]; nrow(all.cov)
 head(all.cov)
@@ -228,15 +230,24 @@ head(all.cov)
 
 cchf.model <- bart.step(xdata = all.cov[,xvars], 
                         ydata = all.cov[,'cchf'], 
-                        full = TRUE)
+                        full = TRUE,
+                        iter.plot = 5,
+                        iter.step = 10,
+                        quiet = TRUE)
 
 # Do the spatial prediction
-cchf.map <- predict(model = cchf.model,
-                    inputstack = covs)
+# This time, let's add the quantiles
+
+cchf.map <- predict(object = cchf.model,
+                    inputstack = covs,
+                    quantiles=c(0.025, 0.975),
+                    splitby=20,
+                    quiet = TRUE)
 
 # How's it look?
-plot(cchf.map, main='CCHF')
-points(pts.sp1, col='black', pch=16)
+plot(cchf.map[[1]], box=FALSE, axes=FALSE, main='CCHF')
+points(pts.sp1, col='black', 
+        pch=16, cex=0.2)
 
 ```
 
@@ -244,91 +255,109 @@ OK. Nice model! Let's see what we can do to unpack it.
 
 First, let's compare it against the tick map.
 
-```{r}
+```{r tick-vs-cchf}
 par(mfrow=c(1,2))
-plot(hytr.layer, main='H. truncatum')
-plot(cchf.map, main='CCHF')
+plot(hytr.layer, box=FALSE, axes=FALSE, main='H. truncatum')
+plot(cchf.map[[1]], box=FALSE, axes=FALSE, main='CCHF')
 ```
 
 Our model seems to be different from the previous one (published by Messina _et al._, using this dataset which they generously provide online) in three major ways. 
 
-First, using the tick vector has increased the amount of predicted suitable area in South Africa, Namibia, Botswana, and Zimbabwe. That makes sense, overall--if there are vectors present, CCHF seems plausible.
+1. First, using the tick vector has increased the amount of predicted suitable area in South Africa, Namibia, Botswana, and Zimbabwe. That makes sense, overall--if there are vectors present, CCHF seems plausible.
+1. The model predicts the area in coastal Cameroon, Gabon, and Equatorial Guinea that we know has some CCHF records but has previously been underpredicted. Weirdly, we don't have good evidence _Hyalomma truncatum_ is there. So, the model is doing well, but the ecology is still unclear.
+1. Finally, the northern coast of Africa is predicted to be highly suitable. There's plenty of _Hyalomma_ species up there, though not _H. truncatum_ as far as our data suggests. It's possible we should think more about the possibility of CCHF in Morocco and Algeria.
 
-Second, the model predicts the area in coastal Cameroon, Gabon, and Equatorial Guinea that we know has some CCHF records but has previously been underpredicted. Weirdly, we don't have good evidence _Hyalomma truncatum_ is there. So, the model is doing well, but the ecology is still unclear.
+Let's take a look at the uncertainty in the model:
 
-Finally, the northern coast of Africa is predicted to be highly suitable. There's plenty of _Hyalomma_ species up there, though not _H. truncatum_ as far as our data suggests. It's possible we should think more about the possibility of CCHF in Morocco and Algeria.
-
-## Visualizing uncertainty
-
-One of the best things about BARTs is that by default the outputs are posteriors, with built-in uncertainty. That's the great thing about Bayesian statistics!
-
-This is going to be, by default, the slowest part of this process. 
-
-```{r}
-
-cchf.map <- bart.map(model = cchf.model,
-                     inputstack = covs,
-                     ci=TRUE)
+```{r cchf-uncertainty}
+par(mfrow=c(1,2))
+plot(cchf.map[[2]], box=FALSE, axes=FALSE, main='2.5% bound')
+plot(cchf.map[[3]], box=FALSE, axes=FALSE, main='97.5% bound')
 ```
 
-When you run this argument with "ci=TRUE" it samples a 5\% and 95\% draw to give you a 90\% credible interval on that posterior. The difference between them--the posterior width in a given pixel--is a pretty good spatial measure of uncertainty. This is the main level of uncertainty people tend to report when they do studies like this, so I'm not feeling a lot of pressure to add more functionality here. But if people want it, I'll add something to pull arbitrary levels from the posterior. (It's also worth noting that the credible intervals in the partial dependence plots come from a similar approach, though I am not in fact completely sure the bounds are a 95\% CI.)
+This may be more interesting to think about in the context of binary maps of presence/absence. We can produce those using `summary`:
+
+```{r cchf-thresholded}
+summary(cchf.model)
+
+par(mfrow=c(1,1))
+plot(cchf.map[[1]]>0.55, box=FALSE, axes=FALSE, main='CCHF risk')
+
+par(mfrow=c(1,2))
+plot(cchf.map[[2]]>0.55, box=FALSE, axes=FALSE, main='2.5% bound')
+plot(cchf.map[[3]]>0.55, box=FALSE, axes=FALSE, main='97.5% bound')
+```
+
+The outer bounds here are _incredibly_ wide - which highlights exactly how little data we have about the distribution of CCHF, and how much uncertainty presentation matters.
+
+Where is the uncertainty highest?
+
+```{r cchf-posterior-width}
+par(mfrow=c(1,1))
+plot(cchf.map[[3]]-cchf.map[[2]], 
+     box=FALSE, axes=FALSE, main='Posterior width, scaled')
+```
+
+Posterior width isn't always the most informative measure of uncertainty. But it does tell us we're most confident in the Sahara, where we're quite sure there's no real CCHF risk, and in the parts of South Africa where spillover is most common. We can further investigate by mapping the places with the most uncertainty:
+
+```{r cchf-highest-uncertainty}
+quant <- quantile(values(cchf.map[[3]]-cchf.map[[2]]), 0.75, na.rm=TRUE)
+
+par(mfrow=c(1,1))
+plot((cchf.map[[3]]-cchf.map[[2]])>quant, 
+     box=FALSE, axes=FALSE, 
+     main = "Highest uncertainty zones")
+```
+
+The most interesting takehome is that uncertainty is particularly high on the Western coast of Africa; along the equator, CCHF spillover has previously occurred but the tick vector is absent. This may be worth further investigation. Similarly, there are no spillovers along the southern coast of Africa, but uncertainty is very high, and it may be worth investigating this more (especially given tick records in that region).
 
 ## Analytics
 
 Finally, let's unpack some of what's under the hood in the model. First let's look at the variable contributions:
 
-```{r}
+```{r cchf-varimp}
 varimp(cchf.model, plots=TRUE)
 ```
 
-NDVI amplitude and the tick vector come out on top; bio1 and mean NDVI also contribute a lot. Let's look at the response functions a little bit. First, let's look at the partial dependence plots for a couple individual variables. (One downside of the BART native plots is (1) they're a bit janky looking and (2) they just spit out a lot of text. That's why the objects are being saved to "p". But I wrote a wrapper that uses what pdbart spits out and ggplot2 to save you the trouble of thinking through dataviz on this one thing.)
+The tick vector come out on top, unsurprisingly! Let's look at the response functions a little bit. First, let's look at the partial dependence plots for a couple individual variables.
 
-```{r}
-# Let's do one variable
-p <- pdbart(cchf.model, xind=hytr, pl=TRUE)
+```{r cchf-partials, fig.height=10}
+# Let's check the tick response curve
+p = partial(cchf.model, 
+        'hytr', 
+        trace=FALSE, 
+        ci=TRUE, 
+        equal=TRUE, 
+        smooth=3)
 
-# That's not very pretty. Let's use embarcadero's version, which allows multiple ways of visualizing the posterior
-partial(cchf.model, 'hytr', trace=FALSE, ci=TRUE, equal=FALSE)
-
-# Hm.... that's a little better. Let's up the smooth (this ISN'T a smoother - it just takes more points to fit the curve) and make the spacing equal.
-partial(cchf.model, 'hytr', trace=TRUE, ci=FALSE, equal=TRUE, smooth=10)
-
-# Let's do a couple at once
-partial(cchf.model, x.vars=c('bio12','bio13'), trace=FALSE, ci=TRUE, panel=TRUE, smooth=5)
+# Let's do all of them at once
+p = partial(cchf.model, 
+        c('bio1','bio2','bio5','bio6'),
+        trace=FALSE, 
+        ci=TRUE, 
+        panel=TRUE, 
+        smooth=3)
 ```
 
 Some of these patterns are pretty clear - suitability declines above 20 degrees C, and increases with the probability of the tick. NDVI is a little less intuitive to the human mind, but a great feature of BART is that we can pretty easily do two-dimensional partial dependence plots, and we can pretty easily visualize the optimum (I haven't added a wrapper for this yet):
 
-```{r}
+```{r cchf-partial2d}
 p <- pd2bart(cchf.model, xind=c('ndvi.mean', 'ndvi.amp'), pl=TRUE)
 ```
 
 This is probably my favorite feature of \texttt{dbarts} - these plots are a really nice way to visualize the Hutchinsonian niche sort of like how NicheA does, but within the familiar framework of classification trees. Plus it's not just a cross-product of the individual partials - the BART framework allows for interactions and sometimes you'll see them show up in these plots.
 
-One last cool trick....
+One last cool trick: spatial partial dependence plots 
 
-
-# These are some figures we can use in the main paper
-
-```{r}
-par(mfrow=c(1,1))
-partial(cchf.model, 'bio12', trace=TRUE, ci=FALSE, equal=TRUE, smooth=10)
-p <- pd2bart(cchf.model, xind=c('ndvi.mean', 'ndvi.amp'), pl=TRUE)
-
-spartial(cchf.model, covs, x.vars = 'bio2', equal=TRUE)
-
-par(mfrow=c(1,3), mar=c(0,0,4,4))
-plot(hytr.layer, box=FALSE, axes=FALSE)
-plot(cchf.map$mean, box=FALSE, axes=FALSE)
-plot(cchf.map$upper.ci - cchf.map$lower.ci, box=FALSE, axes=FALSE)
+```{r cchf-spartial}
+spartial(cchf.model, covs, x.vars = 'bio1', equal=TRUE)
 ```
 
+This map projects the partial dependence plot onto the raster data for the bio1 layer, and can be interpreted as answering the question "Where are mean temperatures most conducive for viral transmission?"
 
 # Finally...
 
-That's all the functionality I've outlined so far. I'll keep building out the visualizations to make them more consistent and publication-ready for people, and am also eager to work with other people on this.
-
-Finally, a big thanks to Jane Messina _et al._ for sharing their CCHF data, and to Graeme Cumming for tick data.
+A big thanks to Jane Messina _et al._ for publicly sharing their CCHF data, and to Graeme Cumming for tick data. 
 
 # References
 
