@@ -138,14 +138,12 @@ In reality, we know we want to do variable set reduction, and tune the model a b
 4. The variable importance plot from `varimp` is generated
 5. The model summary from `summary` is returned
 
-This is slow but very easy to simply fire off if you're running a large workflow. Let's do it:
+This is slow but very easy to simply fire off if you're running a large workflow (you can speed it up, in a demo, by reducing iter.step and even more so by reducing iter.plot). Let's do it:
 
 ```{r stepwise-bart-tick}
 sdm <- bart.step(xdata = all.cov[,xvars], 
                  ydata = all.cov[,'tick'], 
                  full = TRUE,
-                 iter.plot=5,
-                 iter.step=10,
                  quiet = TRUE)
 ```
 
@@ -196,7 +194,9 @@ load(file = "~/Github/pier39/cchf.rda")
 head(cchf)
 nrow(cchf)
 
-# Spatial thinning checks; this also limits it to African points (CCHF is found elsewhere in the world too, and our data includes other records!)
+# Spatial thinning checks; this also limits it to African points 
+# (CCHF is found elsewhere in the world too, 
+# and our data includes other records!)
 
 cchf <- cchf[,c('LONGITUDE','LATITUDE')]; cchf$Presence = 1
 cchf <- SpatialPointsDataFrame(cchf[,1:2],data.frame(Presence=cchf[,3]))
@@ -231,8 +231,6 @@ head(all.cov)
 cchf.model <- bart.step(xdata = all.cov[,xvars], 
                         ydata = all.cov[,'cchf'], 
                         full = TRUE,
-                        iter.plot = 5,
-                        iter.step = 10,
                         quiet = TRUE)
 
 # Do the spatial prediction
@@ -321,7 +319,7 @@ varimp(cchf.model, plots=TRUE)
 
 The tick vector come out on top, unsurprisingly! Let's look at the response functions a little bit. First, let's look at the partial dependence plots for a couple individual variables.
 
-```{r cchf-partials, fig.height=10}
+```{r cchf-partials, fig.height=8}
 # Let's check the tick response curve
 p = partial(cchf.model, 
         'hytr', 
@@ -331,7 +329,7 @@ p = partial(cchf.model,
         smooth=3)
 
 # Let's do all of them at once
-p = partial(cchf.model, 
+partial(cchf.model, 
         c('bio1','bio2','bio5','bio6'),
         trace=FALSE, 
         ci=TRUE, 
