@@ -141,15 +141,15 @@ In reality, we know we want to do variable set reduction, and tune the model a b
 This is slow but very easy to simply fire off if you're running a large workflow (you can speed it up, in a demo, by reducing iter.step and even more so by reducing iter.plot). Let's do it:
 
 ```{r stepwise-bart-tick}
-sdm <- bart.step(xdata = all.cov[,xvars], 
-                 ydata = all.cov[,'tick'], 
+sdm <- bart.step(x.data = all.cov[,xvars], 
+                 y.data = all.cov[,'tick'], 
                  full = TRUE,
                  quiet = TRUE)
 ```
 
 Out of all the variables, "crop" seems to be especially undesirable as a predictor. A few other variables seem like they might not be helping the model either, but we probably need a systematic way to deal with that.
 
-A high AUC value indicates our model performs well. The AUC function also returns an optimal threshold that maximizes the true skill statistic (TSS), and the sensitivity/specificity of the model at that cutoff (alpha).
+A high AUC value indicates our model performs well. The summary function also returns an optimal threshold that maximizes the true skill statistic (TSS), and the sensitivity/specificity of the model at that cutoff (alpha).
 
 What do the predictions look like? To make a predicted raster, we have to use \texttt{embarcadero}'s wrapper for the native \texttt{predict} function in \texttt{dbarts}. 
 
@@ -228,8 +228,8 @@ head(all.cov)
 
 # This part automates the variable selection and returns the model
 
-cchf.model <- bart.step(xdata = all.cov[,xvars], 
-                        ydata = all.cov[,'cchf'], 
+cchf.model <- bart.step(x.data = all.cov[,xvars], 
+                        y.data = all.cov[,'cchf'], 
                         full = TRUE,
                         quiet = TRUE)
 
@@ -279,11 +279,11 @@ This may be more interesting to think about in the context of binary maps of pre
 summary(cchf.model)
 
 par(mfrow=c(1,1))
-plot(cchf.map[[1]]>0.55, box=FALSE, axes=FALSE, main='CCHF risk')
+plot(cchf.map[[1]]>0.47, box=FALSE, axes=FALSE, main='CCHF risk')
 
 par(mfrow=c(1,2))
-plot(cchf.map[[2]]>0.55, box=FALSE, axes=FALSE, main='2.5% bound')
-plot(cchf.map[[3]]>0.55, box=FALSE, axes=FALSE, main='97.5% bound')
+plot(cchf.map[[2]]>0.47, box=FALSE, axes=FALSE, main='2.5% bound')
+plot(cchf.map[[3]]>0.47, box=FALSE, axes=FALSE, main='97.5% bound')
 ```
 
 The outer bounds here are _incredibly_ wide - which highlights exactly how little data we have about the distribution of CCHF, and how much uncertainty presentation matters.
@@ -307,7 +307,7 @@ plot((cchf.map[[3]]-cchf.map[[2]])>quant,
      main = "Highest uncertainty zones")
 ```
 
-The most interesting takehome is that uncertainty is particularly high on the Western coast of Africa; along the equator, CCHF spillover has previously occurred but the tick vector is absent. This may be worth further investigation. Similarly, there are no spillovers along the southern coast of Africa, but uncertainty is very high, and it may be worth investigating this more (especially given tick records in that region).
+The most interesting takehome is that uncertainty is particularly high in the Sahel and on the Western coast of Africa; along the equator, CCHF spillover has previously occurred but the tick vector is absent. This may be worth further investigation. Similarly, there are no spillovers along the southern coast of West Africa, but uncertainty is very high, and it may be worth investigating this more (especially given tick records in that region).
 
 ## Analytics
 
@@ -317,7 +317,7 @@ Finally, let's unpack some of what's under the hood in the model. First let's lo
 varimp(cchf.model, plots=TRUE)
 ```
 
-The tick vector come out on top, unsurprisingly! Let's look at the response functions a little bit. First, let's look at the partial dependence plots for a couple individual variables.
+The tick vector comes out on top, unsurprisingly! Let's look at the response functions a little bit. First, let's look at the partial dependence plots for a couple individual variables.
 
 ```{r cchf-partials, fig.height=8}
 # Let's check the tick response curve
@@ -328,7 +328,7 @@ p = partial(cchf.model,
         equal=TRUE, 
         smooth=3)
 
-# Let's do all of them at once
+# Let's do a few at once
 partial(cchf.model, 
         c('bio1','bio5','bio6','bio12'),
         trace=FALSE, 
@@ -337,7 +337,9 @@ partial(cchf.model,
         smooth=3)
 ```
 
-Some of these patterns are pretty clear - suitability declines above 20 degrees C, and increases with the probability of the tick. NDVI is a little less intuitive to the human mind, but a great feature of BART is that we can pretty easily do two-dimensional partial dependence plots, and we can pretty easily visualize the optimum (I haven't added a wrapper for this yet):
+Some of these patterns are pretty clear - suitability declines with the maximum temperature of the warmest month, and increases with the probability of the tick.
+
+A great feature of BART is that we can pretty easily do two-dimensional partial dependence plots, and we can pretty easily visualize the optimum (I haven't added a wrapper for this yet):
 
 ```{r cchf-partial2d}
 p <- pd2bart(cchf.model, xind=c('bio12', 'ndvi.amp'), pl=TRUE)
