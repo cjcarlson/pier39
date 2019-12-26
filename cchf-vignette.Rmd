@@ -330,7 +330,7 @@ p = partial(cchf.model,
 
 # Let's do all of them at once
 partial(cchf.model, 
-        c('bio1','bio2','bio5','bio6'),
+        c('bio1','bio5','bio6','bio12'),
         trace=FALSE, 
         ci=TRUE, 
         panel=TRUE, 
@@ -340,7 +340,7 @@ partial(cchf.model,
 Some of these patterns are pretty clear - suitability declines above 20 degrees C, and increases with the probability of the tick. NDVI is a little less intuitive to the human mind, but a great feature of BART is that we can pretty easily do two-dimensional partial dependence plots, and we can pretty easily visualize the optimum (I haven't added a wrapper for this yet):
 
 ```{r cchf-partial2d}
-p <- pd2bart(cchf.model, xind=c('ndvi.mean', 'ndvi.amp'), pl=TRUE)
+p <- pd2bart(cchf.model, xind=c('bio12', 'ndvi.amp'), pl=TRUE)
 ```
 
 This is probably my favorite feature of \texttt{dbarts} - these plots are a really nice way to visualize the Hutchinsonian niche sort of like how NicheA does, but within the familiar framework of classification trees. Plus it's not just a cross-product of the individual partials - the BART framework allows for interactions and sometimes you'll see them show up in these plots.
