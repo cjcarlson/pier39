@@ -6,28 +6,29 @@ editor_options:
 ---
 
 ```{r, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>"
-)
+
+knitr::opts_chunk$set(collapse = TRUE,
+                      comment = "#>")
 
 suppressMessages(library(tidyverse))
-options(digits=2)
+options(digits = 2)
 ```
 
 # Getting Started
 
-So you're interested in using \texttt{embarcadero} to do species distribution modeling with Bayesian additive regression trees! That's great. BARTs are a powerful way to do machine learning and, while not a new method per se, they are very new for SDMs. 
+So you're interested in using \texttt{embarcadero} to do species distribution modeling with Bayesian additive regression trees (BART)! That's great. BARTs are a powerful way to do machine learning and, while not a new method per se, they are very new for species distribuion models (SDMs). 
 
 In this advanced tutorial, I'm going to assume that you've seen the main paper and the `embarcadero` package vignette, which goes over basic functions and some of the internal structure of BART models. This tutorial, and the associated repo (`cjcarlson/pier39`), are intended for advanced users interested in seeing what a professional workflow might look like for an applied use.
 
 
 ```{r setup, echo=FALSE, message=FALSE}
+
 library(embarcadero)
 set.seed(12345)
 ```
 
 ```{r load-package, eval=FALSE}
+
 library(embarcadero)
 set.seed(12345)
 ```
@@ -68,7 +69,9 @@ Based on some expert opinion, I picked a handful of variables I thought might wo
 Let's read in the covariates. 
 
 ```{r load-climate}
-load(file = "~/Github/pier39/covsraw.rda"); covs <- covsraw
+
+load(file = "~/pier39/covsraw.rda")
+covs <- covsraw
 class(covs)
 covs@crs <- crs('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0')
 ```
@@ -76,39 +79,49 @@ covs@crs <- crs('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0
 Next, let's load in our tick occurrence dataset, which is a set of longitude/latitude coordinates. 
 
 ```{r load-ticks}
-load(file = "~/Github/pier39/ticks.rda")
+
+load(file = "~/pier39/ticks.rda")
 head(ticks)
 nrow(ticks)
 ```
 
-Presence points are usually a little aggregated in space, so as a normal data cleaning practice, I like to thin my occurrence data to one point per raster grid cell.
+Presence points are usually a little aggregated in space, so as a common data cleaning practice, I like to thin my occurrence data to one point per raster grid cell.
 
 ```{r tick-points}
+
 # Make a spatial point data frame
-mod <- SpatialPointsDataFrame(ticks[,3:4],data.frame(ticks[,1]))
+mod <- SpatialPointsDataFrame(ticks[, 3:4], data.frame(ticks[, 1]))
 names(mod@data) <- 'Presence'
 nrow(mod)
 
+
 # Rasterizing and converting back to points makes one unique point per grid cell
-tmp=rasterize(mod, covs[[1]], field="Presence", fun="min")
-pts.sp1=rasterToPoints(tmp, fun=function(x){x>0})
+tmp <- rasterize(mod, covs[[1]], field = "Presence", fun = "min")
+pts.sp1 <- rasterToPoints(tmp,
+  fun = function(x) {
+    x > 0
+  })
+
 nrow(pts.sp1)
 
-# Extract the climate data at each point 
-pres.cov <- raster::extract(covs, pts.sp1[,1:2])
+# Extract the climate data at each point
+pres.cov <- raster::extract(covs, pts.sp1[, 1:2])
 head(pres.cov)
 ```
 
-Next, let's generate an equal number of pseudoabsences around Africa to the number of presences we have. BARTs are like BRTs in that they are sensitive to assumed prevalence; anecdotally, I strongly suggest using an equal number of presences and absences in your training data. You can experiment with the demo data by changing "nrow(ticks)" to "5000" below if you want to see some weirder model behavior. 
+Next, let's generate an equal number of pseudoabsences around Africa to the number of presences we have. BARTs are like boosted regression trees (BRTs) in that they are sensitive to assumed prevalence; anecdotally, I strongly suggest using an equal number of presences and absences in your training data. You can experiment with the demo data by changing "nrow(ticks)" to "5000" below if you want to see some odd model behavior. 
 
 ```{r tick-dataframe}
-#Generate the data
-absence <- randomPoints(covs,nrow(ticks)) 
+
+# Generate the data
+absence <- randomPoints(covs, nrow(ticks))
 abs.cov <- raster::extract(covs, absence)
 
-#Code the response
-pres.cov <- data.frame(pres.cov); pres.cov$tick <- 1
-abs.cov <- data.frame(abs.cov); abs.cov$tick <- 0
+# Code the response
+pres.cov <- data.frame(pres.cov)
+pres.cov$tick <- 1
+abs.cov <- data.frame(abs.cov)
+abs.cov$tick <- 0
 
 # And one to bind them
 all.cov <- rbind(pres.cov, abs.cov)
@@ -125,9 +138,10 @@ Now we have a dataset ready to do some modeling!
 We could try something really simple on defaults, right out the gate. The \texttt{bart} function in \texttt{dbarts} can just be run on defaults:
 
 ```{r example-model}
-xvars <- names(all.cov)[!(names(all.cov)=='tick')]
+
+xvars <- names(all.cov)[!(names(all.cov) == 'tick')]
 xvars
-first.model <- bart(all.cov[,xvars], all.cov[,'tick'], keeptrees=TRUE)
+first.model <- bart(all.cov[, xvars], all.cov[, 'tick'], keeptrees = TRUE)
 ```
 
 In reality, we know we want to do variable set reduction, and tune the model a bit from there. In the main vignette you can see the different component parts of that process. Here, we're going to use our most powerful shortcut: `bart.step`. Inside `bart.step`, five things happen:
@@ -141,6 +155,7 @@ In reality, we know we want to do variable set reduction, and tune the model a b
 This is slow but very easy to simply fire off if you're running a large workflow (you can speed it up, in a demo, by reducing iter.step and even more so by reducing iter.plot). Let's do it:
 
 ```{r stepwise-bart-tick}
+
 sdm <- bart.step(x.data = all.cov[,xvars], 
                  y.data = all.cov[,'tick'], 
                  full = TRUE,
@@ -149,7 +164,7 @@ sdm <- bart.step(x.data = all.cov[,xvars],
 
 Out of all the variables, "crop" seems to be especially undesirable as a predictor. A few other variables seem like they might not be helping the model either, but we probably need a systematic way to deal with that.
 
-A high AUC value indicates our model performs well. The summary function also returns an optimal threshold that maximizes the true skill statistic (TSS), and the sensitivity/specificity of the model at that cutoff (alpha).
+A high value for the area under the receiver-operator curve (AUC) indicates our model performs well. The summary function also returns an optimal threshold that maximizes the true skill statistic (TSS), and the sensitivity/specificity of the model at that cutoff (alpha).
 
 What do the predictions look like? To make a predicted raster, we have to use \texttt{embarcadero}'s wrapper for the native \texttt{predict} function in \texttt{dbarts}. 
 
@@ -157,16 +172,22 @@ What do the predictions look like? To make a predicted raster, we have to use \t
 
 # Do the spatial prediction
 hytr.layer <- predict(object = sdm,
-                      inputstack = covs,
-                      splitby = 20,
-                      quiet = TRUE)
+  x.layers = covs,
+  splitby = 20,
+  quiet = TRUE)
 
 # How's it look?
-plot(hytr.layer, box=FALSE, axes=FALSE, main='Hyalomma truncatum')
+plot(hytr.layer,
+     box = FALSE,
+     axes = FALSE,
+     main = 'Hyalomma truncatum',
+     zlim = c(0,1),
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Probability', side=2, line=1.3))
 
 # Check that against the presence data:
-points(SpatialPoints(ticks[,c('Longitude.X','Latitude.Y')]), 
-        pch=16, cex=0.2)
+points(SpatialPoints(ticks[, c('Longitude.X', 'Latitude.Y')]),
+       pch = 16, cex = 0.2)
 
 ```
 
@@ -178,74 +199,90 @@ Alright. Now let's get back to business by building the CCHF map. We're going to
 
 ## Running the CCHF model
 
-This time, let's just do the variable selection up front. Same plan as before:
+This time, let's just do the variable selection up front. Same plan as before, plus some thinning out of non-African points, given that CCHF is found elsewhere in the world:
 
 ```{r cchf-pipeline}
 
 # Update the covariate stack
 
 covs <- stack(covs, hytr.layer)
-names(covs)[12]='hytr' # for Hyalomma truncatum
+names(covs)[12] = 'hytr' # for Hyalomma truncatum
 xvars <- c(xvars, 'hytr')
 
 # Read in the data
 
-load(file = "~/Github/pier39/cchf.rda")
+load(file = "~/pier39/cchf.rda")
 head(cchf)
 nrow(cchf)
 
-# Spatial thinning checks; this also limits it to African points 
-# (CCHF is found elsewhere in the world too, 
-# and our data includes other records!)
+# Spatial thinning checks
 
-cchf <- cchf[,c('LONGITUDE','LATITUDE')]; cchf$Presence = 1
-cchf <- SpatialPointsDataFrame(cchf[,1:2],data.frame(Presence=cchf[,3]))
-tmp=rasterize(cchf, covs[[1]], field="Presence", fun="min")
-pts.sp1=rasterToPoints(tmp, fun=function(x){x>0})
+cchf <- cchf[, c('LONGITUDE', 'LATITUDE')]
+cchf$Presence = 1
+cchf <- SpatialPointsDataFrame(cchf[, 1:2], data.frame(Presence = cchf[, 3]))
+tmp <- rasterize(cchf, covs[[1]], field = "Presence", fun = "min")
+pts.sp1 <- rasterToPoints(tmp,
+  fun = function(x) {
+    x > 0
+  })
+
 nrow(pts.sp1)
 
 # Extract presence values
 
-pres.cov <- raster::extract(covs, pts.sp1[,1:2])
+pres.cov <- raster::extract(covs, pts.sp1[, 1:2])
 pres.cov <- na.omit(pres.cov)
 head(pres.cov)
 
-#Generate pseudoabsences
+# Generate pseudoabsences
 
-absence <- randomPoints(covs,nrow(pres.cov)) 
+absence <- randomPoints(covs, nrow(pres.cov))
 abs.cov <- raster::extract(covs, absence)
 
-#Code the response
+# Code the response
 
-pres.cov <- data.frame(pres.cov); pres.cov$cchf <- 1
-abs.cov <- data.frame(abs.cov); abs.cov$cchf <- 0
+pres.cov <- data.frame(pres.cov)
+pres.cov$cchf <- 1
+abs.cov <- data.frame(abs.cov)
+abs.cov$cchf <- 0
 
 # And one to bind them
 
 all.cov <- rbind(pres.cov, abs.cov)
-all.cov <- all.cov[complete.cases(all.cov),]; nrow(all.cov)
+all.cov <- all.cov[complete.cases(all.cov), ]
+nrow(all.cov)
 head(all.cov)
 
 # This part automates the variable selection and returns the model
 
-cchf.model <- bart.step(x.data = all.cov[,xvars], 
-                        y.data = all.cov[,'cchf'], 
-                        full = TRUE,
-                        quiet = TRUE)
+cchf.model <- bart.step(x.data = all.cov[, xvars],
+  y.data = all.cov[, 'cchf'],
+  full = TRUE,
+  quiet = TRUE)
 
 # Do the spatial prediction
 # This time, let's add the quantiles
 
-cchf.map <- predict(object = cchf.model,
-                    inputstack = covs,
-                    quantiles=c(0.025, 0.975),
-                    splitby=20,
-                    quiet = TRUE)
+cchf.map <- predict(
+  object = cchf.model,
+  x.layers = covs,
+  quantiles = c(0.025, 0.975),
+  splitby = 20,
+  quiet = TRUE)
 
 # How's it look?
-plot(cchf.map[[1]], box=FALSE, axes=FALSE, main='CCHF')
-points(pts.sp1, col='black', 
-        pch=16, cex=0.2)
+# (Excludes points not in Africa)
+plot(cchf.map[[1]],
+     box = FALSE,
+     axes = FALSE,
+     main = 'CCHF',
+     zlim = c(0,1),
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Probability', side=2, line=1.3))
+points(pts.sp1[!is.na(raster::extract(cchf.map[[1]], SpatialPoints(pts.sp1[,1:2]))),],
+       col = 'black',
+       pch = 16,
+       cex = 0.3)
 
 ```
 
@@ -254,9 +291,15 @@ OK. Nice model! Let's see what we can do to unpack it.
 First, let's compare it against the tick map.
 
 ```{r tick-vs-cchf}
-par(mfrow=c(1,2))
-plot(hytr.layer, box=FALSE, axes=FALSE, main='H. truncatum')
-plot(cchf.map[[1]], box=FALSE, axes=FALSE, main='CCHF')
+
+plot(hytr.layer,
+     box = FALSE,
+     axes = FALSE,
+     main = 'H. truncatum',
+     zlim = c(0,1),
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Probability', side=2, line=1.3))
+
 ```
 
 Our model seems to be different from the previous one (published by Messina _et al._, using this dataset which they generously provide online) in three major ways. 
@@ -268,22 +311,50 @@ Our model seems to be different from the previous one (published by Messina _et 
 Let's take a look at the uncertainty in the model:
 
 ```{r cchf-uncertainty}
-par(mfrow=c(1,2))
-plot(cchf.map[[2]], box=FALSE, axes=FALSE, main='2.5% bound')
-plot(cchf.map[[3]], box=FALSE, axes=FALSE, main='97.5% bound')
+
+plot(cchf.map[[2]],
+     box = FALSE,
+     axes = FALSE,
+     main = '2.5% bound',
+     zlim = c(0,1),
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Probability', side=2, line=1.3))
+
+plot(cchf.map[[3]],
+     box = FALSE,
+     axes = FALSE,
+     main = '97.5% bound',
+     zlim = c(0,1),
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Probability', side=2, line=1.3))
 ```
 
-This may be more interesting to think about in the context of binary maps of presence/absence. We can produce those using `summary`:
+This may be more interesting to think about in the context of binary maps of presence/absence. We can produce those using `summary` (a value of 1 means presence and 0 means absence, once thresholded):
 
 ```{r cchf-thresholded}
+
 summary(cchf.model)
 
-par(mfrow=c(1,1))
-plot(cchf.map[[1]]>0.47, box=FALSE, axes=FALSE, main='CCHF risk')
+plot(cchf.map[[1]] > 0.47,
+     box = FALSE,
+     axes = FALSE,
+     main = 'CCHF risk',
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Risk classification', side=2, line=1.3))
 
-par(mfrow=c(1,2))
-plot(cchf.map[[2]]>0.47, box=FALSE, axes=FALSE, main='2.5% bound')
-plot(cchf.map[[3]]>0.47, box=FALSE, axes=FALSE, main='97.5% bound')
+plot(cchf.map[[2]] > 0.47,
+     box = FALSE,
+     axes = FALSE,
+     main = '2.5% posterior bound',
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Risk classification', side=2, line=1.3))
+
+plot(cchf.map[[3]] > 0.47,
+     box = FALSE,
+     axes = FALSE,
+     main = '97.5% posterior bound',
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Risk classification', side=2, line=1.3))
 ```
 
 The outer bounds here are _incredibly_ wide - which highlights exactly how little data we have about the distribution of CCHF, and how much uncertainty presentation matters.
@@ -291,20 +362,30 @@ The outer bounds here are _incredibly_ wide - which highlights exactly how littl
 Where is the uncertainty highest?
 
 ```{r cchf-posterior-width}
-par(mfrow=c(1,1))
-plot(cchf.map[[3]]-cchf.map[[2]], 
-     box=FALSE, axes=FALSE, main='Posterior width, scaled')
+
+plot(cchf.map[[3]] - cchf.map[[2]],
+     box = FALSE,
+     axes = FALSE,
+     main = 'Uncertainty',
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Posterior width', side=2, line=1.3))
 ```
 
 Posterior width isn't always the most informative measure of uncertainty. But it does tell us we're most confident in the Sahara, where we're quite sure there's no real CCHF risk, and in the parts of South Africa where spillover is most common. We can further investigate by mapping the places with the most uncertainty:
 
 ```{r cchf-highest-uncertainty}
-quant <- quantile(values(cchf.map[[3]]-cchf.map[[2]]), 0.75, na.rm=TRUE)
 
-par(mfrow=c(1,1))
-plot((cchf.map[[3]]-cchf.map[[2]])>quant, 
-     box=FALSE, axes=FALSE, 
-     main = "Highest uncertainty zones")
+quant <- quantile(values(cchf.map[[3]] - cchf.map[[2]]), 
+                  0.75, 
+                  na.rm = TRUE)
+
+plot((cchf.map[[3]] - cchf.map[[2]]) > quant,
+     box = FALSE,
+     axes = FALSE,
+     main = "Highest uncertainty zones",
+     axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Risk classification', side=2, line=1.3)
+)
 ```
 
 The most interesting takehome is that uncertainty is particularly high in the Sahel and on the Western coast of Africa; along the equator, CCHF spillover has previously occurred but the tick vector is absent. This may be worth further investigation. Similarly, there are no spillovers along the southern coast of West Africa, but uncertainty is very high, and it may be worth investigating this more (especially given tick records in that region).
@@ -314,35 +395,41 @@ The most interesting takehome is that uncertainty is particularly high in the Sa
 Finally, let's unpack some of what's under the hood in the model. First let's look at the variable contributions:
 
 ```{r cchf-varimp}
-varimp(cchf.model, plots=TRUE)
+
+varimp(cchf.model, plots = TRUE)
 ```
 
 The tick vector comes out on top, unsurprisingly! Let's look at the response functions a little bit. First, let's look at the partial dependence plots for a couple individual variables.
 
-```{r cchf-partials, fig.height=8}
+```{r cchf-partials, fig.height=7, fig.width=7}
+
 # Let's check the tick response curve
-p = partial(cchf.model, 
-        'hytr', 
-        trace=FALSE, 
-        ci=TRUE, 
-        equal=TRUE, 
-        smooth=3)
+partial(cchf.model,
+  'hytr',
+  trace = FALSE,
+  ci = TRUE,
+  equal = TRUE,
+  smooth = 3)
 
 # Let's do a few at once
-partial(cchf.model, 
-        c('bio1','bio5','bio6','bio12'),
-        trace=FALSE, 
-        ci=TRUE, 
-        panel=TRUE, 
-        smooth=3)
+partial(cchf.model,
+  c('bio1', 'bio5', 'bio6', 'bio12'),
+  trace = FALSE,
+  ci = TRUE,
+  panel = TRUE,
+  smooth = 3)
 ```
 
 Some of these patterns are pretty clear - suitability declines with the maximum temperature of the warmest month, and increases with the probability of the tick.
 
 A great feature of BART is that we can pretty easily do two-dimensional partial dependence plots, and we can pretty easily visualize the optimum (I haven't added a wrapper for this yet):
 
-```{r cchf-partial2d}
-p <- pd2bart(cchf.model, xind=c('bio12', 'ndvi.amp'), pl=TRUE)
+```{r cchf-partial2d, fig.height=4, fig.width=5}
+
+
+p <- pd2bart(cchf.model,
+             xind = c('bio12', 'ndvi.amp'),
+             pl = TRUE)
 ```
 
 This is probably my favorite feature of \texttt{dbarts} - these plots are a really nice way to visualize the Hutchinsonian niche sort of like how NicheA does, but within the familiar framework of classification trees. Plus it's not just a cross-product of the individual partials - the BART framework allows for interactions and sometimes you'll see them show up in these plots.
@@ -350,10 +437,84 @@ This is probably my favorite feature of \texttt{dbarts} - these plots are a real
 One last cool trick: spatial partial dependence plots 
 
 ```{r cchf-spartial}
-spartial(cchf.model, covs, x.vars = 'bio1', equal=TRUE)
+
+sp.bio1 <- spartial(cchf.model, covs, x.vars = 'bio1', equal = TRUE)
+plot(sp.bio1, 
+     box = FALSE,
+     axes = FALSE,
+     main = 'Spartial plot: bio1',
+     #zlim = c(0,1),
+     #axis.args=list(at=pretty(0:1), labels=pretty(0:1)),
+     legend.args=list(text='Partial effect', side=2, line=1.3))
 ```
 
 This map projects the partial dependence plot onto the raster data for the bio1 layer, and can be interpreted as answering the question "Where are mean temperatures most conducive for viral transmission?"
+
+Last thing: let's make the nice figures in the main text of the paper.
+
+
+```{r cchf-fig4}
+
+library(rasterVis)
+library(RColorBrewer)
+
+mapTheme <- rasterTheme(region = rev(brewer.pal(11, "Spectral")),
+  layout.widths = list(right.padding = 10),
+  axis.line = list(col = "transparent"),
+  tick = list(col = 'transparent'))
+
+levelplot(cchf.map[[1]],
+  maxpixels = 1e10,
+  margin = FALSE,
+  par.settings = mapTheme,
+  scales = list(x = list(draw = FALSE),
+                y = list(draw = FALSE)),
+  zlim = c(0, 1))
+
+grid::grid.text('Probability of presence',
+  rot = 90,
+  y = unit(0.5, "npc"),
+  x = unit(0.925, "npc"),
+  gp = grid::gpar(fontsize = 15))
+
+mapTheme <- rasterTheme(region = brewer.pal(9, "Blues"),
+  layout.widths = list(right.padding = 10),
+  axis.line = list(col = "transparent"),
+  tick = list(col = 'transparent'))
+
+levelplot(cchf.map[[3]] - cchf.map[[2]],
+  maxpixels = 1e10,
+  margin = FALSE,
+  par.settings = mapTheme,
+  scales = list(x = list(draw = FALSE),
+                y = list(draw = FALSE)),
+  zlim = c(0, 1))
+
+grid::grid.text('Posterior width',
+  rot = 90,
+  y = unit(0.5, "npc"),
+  x = unit(0.925, "npc"),
+  gp = grid::gpar(fontsize = 15))
+
+
+mapTheme <- rasterTheme(region = brewer.pal(9, "YlOrRd"),
+  layout.widths = list(right.padding = 10),
+  axis.line = list(col = "transparent"),
+  tick = list(col = 'transparent'))
+
+levelplot(sp.bio1,
+  maxpixels = 1e10,
+  margin = FALSE,
+  par.settings = mapTheme,
+  scales = list(x = list(draw = FALSE),
+                y = list(draw = FALSE)))
+
+grid::grid.text('Partial effect of mean annual temp.',
+  rot = 90,
+  y = unit(0.5, "npc"),
+  x = unit(0.925, "npc"),
+  gp = grid::gpar(fontsize = 15))
+```
 
 # Finally...
 
